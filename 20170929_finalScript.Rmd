@@ -1,0 +1,1297 @@
+---
+title: "Root microbiome dynamics in response to phosphate "
+author: Natacha Bodenhausen and Vincent Somerville
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: yes
+---
+
+## Abstract
+In this study, we investigate the interplay between bacteria and fungi that are associated with the roots of Petunia plants as a function of the P availability in soil. Additionally, we examine Arabidopsis plants, which secrete minute amounts of strigolactones and which are not colonized by AMF. Finally, we included soil samples to control for the effect of P levels on the microbial community in the absence of plants. The goals of this study are to understand the dynamics of the root microbiome in response to the P availability in soil and to clarify the role of strigolactones as signaling molecules in this process.
+
+## Method
+Petunia and Arabidopsis were grown in pots filled with Soil from next to the FAST trial. Pots were watered with a P gradient: low, medium and high. Plants were harvested after 10 weeks. Two fractions for each sample were harvested: 1) the roots were washed three times with phosphate buffer and dried on filter paper, this fraction is called the 'root' community; 2) the three washes of each sample were pooled and centrifuged, the pellet is called the 'rhizosphere'. The roots and the rhizosphere samples were stored at -80C until DNA extraction. For this data set, only the root-associated community was analyzed. In addtion, soil from unplanetd pot was also collected. Together, there were 108 samples (72 Petunia samples, 24 Arabidopsis samples and 12 soil samples).
+
+DNA was extracted from the roots by Natacha with NucleoSpin Soil kit from Macherey-Nage. For the bacterial community, a fragment of the 16S rRNA gene was amplifed with primers 799F and 1193R. For the fungal community, a fragment of the intergenic spacer region 1 was amplified with primers ITS1F and ITS2 which were found in a previous comparison to perform better than other primers pairs (higher richness, little contamination with plant DNA, high percentage of Glomeraceae) . Alain prepared the fungal library and Natacha prepared the bacterial library. After clean-up, the PCR products were pooled in equimolar concentrations and sequenced at the Functional Genomics Center in Zurich with MiSeq.
+
+\newpage
+
+```{r libraries, echo=FALSE, warning=FALSE, message=FALSE}
+
+##load library or if necassary install and load function
+source("../functions/mylibrary.R")
+
+
+mylibrary(c("igraph","edgeR","Hmisc","RColorBrewer"))
+
+# library(igraph)
+# library(edgeR)
+# library(Hmisc)
+# library(RColorBrewer)
+
+mylibrary(c("vegan","VennDiagram","knitr","matrixStats","ggplot2","phyloseq","sciplot","gplots","pander","animation","network","reshape2","gridExtra"))
+
+library(plyr)
+
+# library("vegan")
+# library("VennDiagram")
+# library("knitr")
+# library("matrixStats")
+# library("ggplot2")
+# library("phyloseq")
+# library("metagenomeSeq")
+# library("sciplot")
+# library("gplots")
+# library("pander")
+
+
+
+# ## try http:// if https:// URLs are not supported
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("DESeq2")
+
+# Natacha's function
+source("../functions/function_plotOTU_3.R")
+source("../functions/function_stackedBarplot.R")
+source("../functions/diversity_plot_best.R")
+source("../functions/function_ternary_plot.R")
+source("../functions/maPalette.r")  
+
+# Vincent's function
+source("../functions/compareNA.R")
+source("../functions/CorrDF.R")
+source("../functions/image_scale.R")
+source("../functions/vennDia.R")
+source("../functions/node_degree_abundance_plot_new.R")
+
+
+```
+
+```{r colors, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+palePurple <- brewer.pal(3,name="Set2")[3] ## low
+paleOrange <- brewer.pal(3,name="Set2")[2] ## medium
+paleGreen<-brewer.pal(3,name="Set2")[1] ##  High
+
+Pcolors <- c(palePurple , paleOrange, paleGreen)
+
+three_blues <- brewer.pal(9,name="YlGnBu")[c(4,6,8)]
+three_reds <-c(brewer.pal(9,name="YlOrRd")[c(4,6)],
+							 brewer.pal(3,name="Reds")[3])
+three_browns <-brewer.pal(9,name="YlOrBr")[c(7,8,9)]
+
+
+
+
+## setting rarefication max
+raremax_ITS <- 12500
+raremax_16S <- 12500
+
+
+options(scipen=1000)
+
+```
+
+## MySeq (16S) loading data from bioinformatic analysis
+
+```{r load_data_16S}
+# table 1 is the OTU table
+# Rows corresponds to OTU and columns to samples.
+taxonTable_16S <- read.table("../data_16S/all_barcode_map97_ab2.tab", header=TRUE, row.names=1)
+
+# name of the samples are very long, they also have run information and primers
+# replace with only 2 barcode names
+
+# Vincent way is much smarter!
+names_sample_16S <-strsplit(gsub("([[:upper:]])", " \\1", colnames(taxonTable_16S)),split=" ")
+
+names_sample_16S<-data.frame(names_sample_16S)
+names_sample_16S <-t(names_sample_16S)
+rownames(names_sample_16S)<-NULL
+
+names_sample_16S<-names_sample_16S[,c(5,3)]
+
+colnames(names_sample_16S)<-c("forward","reverse")
+names_sample_16S <- as.data.frame(unclass(names_sample_16S))
+
+colnames(taxonTable_16S) <- paste(names_sample_16S$forward, 
+                                  names_sample_16S$reverse, 
+                                  sep="_")
+
+# table 3 is the taxonomy table (first reformat table in excel with 
+# Data > text to column)
+taxonomy_16S <- read.table("../data_16S/all_barcode_OTU_ab2_id97_tax_assignments.txt", 
+                      row.names=1, sep="\t", quote="",fill=T,
+                      stringsAsFactors = FALSE)
+
+colnames(taxonomy_16S) <-c("Kingdom","Phylum","Class",
+                       "Order","Family","Genus","Species","number")
+
+
+# order OTUs in table 3 by by the same order as table 1
+ord_16S = match(rownames(taxonTable_16S), rownames(taxonomy_16S)) 
+taxonomy_16S = taxonomy_16S[ord_16S, ]
+
+stopifnot(all(identical(rownames(taxonomy_16S),rownames(taxonTable_16S))))
+
+n_otu_step1_16S<- nrow(taxonTable_16S)  # 3674
+n_samples_step1_16S <- ncol(taxonTable_16S) # 108
+n_sequences_setp1_16S <- sum(taxonTable_16S)  # 1740637
+
+
+```
+
+## MySeq (ITS) loading data from bioinformatic analysis
+
+```{r load_data_miseq_ITS, }
+# table 1 is the OTU table
+taxonTable_ITS<- read.table("../data_miseq/Pexp1_l175_sort_derep_ab5_otu_chimerafree.tab", header=TRUE, row.names=1)
+# Rows corresponds to OTU and columns to samples.
+
+
+# table 3 is the taxonomy table (first reformat table in excel with 
+# Data > text to column, and deleting extra columns, add also colnames)
+taxonomy_ITS <- read.table("../data_miseq/UNITE_tax_forR.txt", 
+                       row.names=1, sep="\t", fill=T)
+
+colnames(taxonomy_ITS) <- c("Kingdom","Phylum","Class","Order","Family","Genus","Species","number")
+
+# order OTUs in table 3 by by the same order as table 1
+ord = match(rownames(taxonTable_ITS), rownames(taxonomy_ITS)) 
+taxonomy_ITS = taxonomy_ITS[ord, ]
+
+stopifnot(identical(rownames(taxonomy_ITS),rownames(taxonTable_ITS)))
+
+n_otu_step1_ITS<- nrow(taxonTable_ITS) # 1355
+n_samples_step1_ITS <- ncol(taxonTable_ITS) #108
+n_sequences_setp1_ITS <- sum(taxonTable_ITS)  # 5144458
+
+```
+
+### Prepare sample table for 16S
+
+```{r sampleTable_16S}
+# read design table
+sampleTable_16S <-read.csv("../data_16S/design.csv", header=TRUE, na.strings = "NA")
+
+# 1) change rownames so that they are identical to taxonTable
+rownames(sampleTable_16S) <- paste(sampleTable_16S$forward,"799", sampleTable_16S$reverse, "1193", sep="_")
+
+
+# 2) change the order of the levels for P treatment, from low to high
+sampleTable_16S$Treatment <- factor (sampleTable_16S$Treatment, levels(sampleTable_16S$Treatment)[c(2,3,1)])
+
+# 3) change the order of the levels for plant, from Arabidopsis to Petunia, dad1, last soil
+sampleTable_16S$SampleType <- factor (sampleTable_16S$SampleType,
+                             levels(sampleTable_16S$SampleType)[c(1,3,2,4,5)])
+
+
+# 4) order rows by sample type then treatment
+sampleTable_16S<- sampleTable_16S[with(sampleTable_16S, order(sampleTable_16S$SampleType, sampleTable_16S$Treatment)), ]
+
+# 5) Reorganise sampleTable: remove unnecessary columns
+sampleTable_16S <- sampleTable_16S[,c(-1,-2,-7:-9)]
+
+# 6) change column names so that they are identical to ITS table
+colnames(sampleTable_16S)[2:4] <- c("plant","treatment","replicate")
+
+# 7) order samples in table 1 by by the same order as table 2
+ord = match(rownames(sampleTable_16S), colnames(taxonTable_16S) ) 
+taxonTable_16S = taxonTable_16S[,ord]
+
+# 9) change V26 to Petunia
+levels(sampleTable_16S$plant)[levels(sampleTable_16S$plant)=="V26"] <-"Petunia"
+
+stopifnot(all(identical(colnames(taxonTable_16S),rownames(sampleTable_16S))))
+
+table(sampleTable_16S$plant,sampleTable_16S$treatment)
+
+# make the names of replicates shorter
+sampleTable_16S$replicate <- sapply(sampleTable_16S$replicate, function(s) {gsub("replicate", "rep", s)})
+
+
+```
+
+### Prepare sample table for ITS
+
+```{r sampleTable_ITS, }
+
+# sample name and treatment
+sampleTable_ITS <-read.csv("../data_miseq/Pexp1_design.txt", header=TRUE,sep = "\t")
+
+# 1) change rownames so that they are identical to taxonTable
+rownames(sampleTable_ITS) <- paste(sampleTable_ITS$forwardPrimer,sampleTable_ITS$reversePrimer,sep = "_")
+
+# 2) change the order of the levels for P treatment, from low to high
+sampleTable_ITS$treatment <- factor (sampleTable_ITS$treatment,
+                                    levels(sampleTable_ITS$treatment)[c(2,3,1)])
+
+# 3) change the order of the levels for plant, from Arabidopsis to Petunia, dad1, last soil
+sampleTable_ITS$plant <- factor (sampleTable_ITS$plant,
+                             levels(sampleTable_ITS$plant)[c(1,3,2,4,5)])
+
+# 4) order by sample type then treatment
+sampleTable_ITS<- sampleTable_ITS[with(sampleTable_ITS, order(sampleTable_ITS$plant, sampleTable_ITS$treatment)), ]
+
+# 5) Reorganise SampleTable: remove unwanted columns 
+sampleTable_ITS <- sampleTable_ITS[,-5:-8]
+
+# 6) change name of columns so that is matches the 16S table
+colnames(sampleTable_ITS)[4:6] <- c("sample_name","reverse","forward")
+
+# 7) add long name and make it a factor
+sampleTable_ITS$SampleName <- paste(sampleTable_ITS$plant,sampleTable_ITS$treatment,sampleTable_ITS$replicate,sep="_")
+sampleTable_ITS$SampleName <- as.factor(sampleTable_ITS$SampleName)
+
+# 8) order samples in table 1 by by the same order as table 2
+ord = match(rownames(sampleTable_ITS), colnames(taxonTable_ITS) ) 
+taxonTable_ITS = taxonTable_ITS[,ord]
+
+# 9) change V26 to Petunia
+levels(sampleTable_ITS$plant)[3] <-"Petunia"
+
+
+stopifnot(all(identical(colnames(taxonTable_ITS),rownames(sampleTable_ITS))))
+
+table(sampleTable_ITS$plant,sampleTable_ITS$treatment)
+
+# make the names of replicates shorter
+sampleTable_ITS$replicate <- sapply(sampleTable_16S$replicate, function(s) {gsub("replicate", "rep", s)})
+
+```
+
+
+### remove W115 and dad1 from 16S
+
+
+```{r remove_W115_dad1_outlier_16S}
+### remove W115 and dad1
+remove_plants <-!sampleTable_16S$plant %in% c("dad1", "W115")
+sampleTable_16S <- droplevels(sampleTable_16S[remove_plants,])
+taxonTable_16S <- taxonTable_16S[,remove_plants]
+
+# remove sample 68, low_V26_replicate1
+bad <- rownames(sampleTable_16S[sampleTable_16S$SampleName=="V26_low_replicate1",])
+sampleTable_16S <- sampleTable_16S[!rownames(sampleTable_16S)==bad,]
+taxonTable_16S <- taxonTable_16S[,!colnames(taxonTable_16S)==bad]
+
+
+# remove all the OTUs which were only present in Arab and dad1 plants
+# remove singletons
+taxonTable_16S <-taxonTable_16S[rowSums(taxonTable_16S)>1,]
+
+# remove singletons from taxonomy
+taxonomy_16S <-taxonomy_16S[rownames(taxonomy_16S)%in%rownames(taxonTable_16S),]
+stopifnot(identical(rownames(taxonomy_16S),rownames(taxonTable_16S)))
+
+table1 <- table(sampleTable_16S$plant,sampleTable_16S$treatment)
+#pander(table1, caption="samples")
+
+
+# check which primers were used for which sample type
+table2 <- table(sampleTable_16S$plant,sampleTable_16S$forward)
+#pander(table2, caption="forward")
+
+table3 <- table(sampleTable_16S$plant,sampleTable_16S$reverse)
+#pander(table3, caption="reverse")
+
+
+n_otu_step1_16S<- nrow(taxonTable_16S) # 3674
+n_samples_step1_16S <- ncol(taxonTable_16S) #60
+n_sequences_setp1_16S <- sum(taxonTable_16S) # 1740637
+```
+
+
+### remove W115 and dad1 from ITS
+
+
+```{r remove_W115_dad1_outlier_ITS}
+### remove W115 and dad1
+remove_plants <-!sampleTable_ITS$plant %in% c("dad1", "W115")
+sampleTable_ITS <- droplevels(sampleTable_ITS[remove_plants,])
+taxonTable_ITS <- taxonTable_ITS[,remove_plants]
+
+# remove sample 68, low_V26_replicate1
+bad <- rownames(sampleTable_ITS[sampleTable_ITS$SampleName=="V26_low_replicate1",])
+sampleTable_ITS <- sampleTable_ITS[!rownames(sampleTable_ITS)==bad,]
+taxonTable_ITS <- taxonTable_ITS[,!colnames(taxonTable_ITS)==bad]
+
+
+# remove all the OTUs which were only present in Arab and dad1 plants
+# remove singletons
+taxonTable_ITS <-taxonTable_ITS[rowSums(taxonTable_ITS)>1,]
+
+# remove singletons from taxonomy
+taxonomy_ITS <-taxonomy_ITS[rownames(taxonomy_ITS)%in%rownames(taxonTable_ITS),]
+stopifnot(identical(rownames(taxonomy_ITS),rownames(taxonTable_ITS)))
+
+table1 <- table(sampleTable_ITS$plant,sampleTable_ITS$treatment)
+#pander(table1, caption="samples")
+
+
+# check which primers were used for which sample type
+table2 <- table(sampleTable_ITS$plant,sampleTable_ITS$forward)
+#pander(table2, caption="forward")
+
+table3 <- table(sampleTable_ITS$plant,sampleTable_ITS$reverse)
+#pander(table3, caption="reverse")
+
+
+n_otu_step1_ITS<- nrow(taxonTable_ITS) # 1368
+n_samples_step1_ITS <- ncol(taxonTable_ITS) # 60
+```
+
+## treatment colours
+
+```{r color_Variable_ITS}
+# color variable
+sampleTable_ITS$color <- interaction(sampleTable_ITS$plant,sampleTable_ITS$treatment)
+
+levels(sampleTable_ITS$color)  <- c(three_reds[1], three_blues[1], three_browns[1],
+                                three_reds[2], three_blues[2], three_browns[2],
+                                three_reds[3], three_blues[3], three_browns[3])
+
+
+# for the legend
+sampleTable_ITS$group <- interaction(sampleTable_ITS$plant, sampleTable_ITS$treatment)
+
+# plot legend 
+xx <- data.frame("samples" =levels(sampleTable_ITS$group),
+           "color" = levels(sampleTable_ITS$color) )
+xx$y <-rep(3:1,3)
+xx$x <-rep(1:3,each=3)
+
+pdf("../results/legend_its.pdf", width=10/cm(1), height=7/cm(1), pointsize=10, fonts="Helvetica")
+plot(xx$x, xx$y, col=as.character(xx$color), pch=19, 
+     yaxt="n", xaxt="n", 
+     ylab="", xlab="", 
+     bty="n",
+     ylim=c(0,5), xlim=c(-1,4), xpd=TRUE)
+text(x=0, y=c(1:3), labels=rev(levels(sampleTable_ITS$plant)))
+text(y=4, x=c(1:3), labels=levels(sampleTable_ITS$treatment))
+dev.off()
+
+
+```
+
+
+```{r color_Variable_16s}
+# color variable
+sampleTable_16S$color <- interaction(sampleTable_16S$plant,sampleTable_16S$treatment)
+
+levels(sampleTable_16S$color)  <- c(three_reds[1], three_blues[1], three_browns[1],
+                                three_reds[2], three_blues[2], three_browns[2],
+                                three_reds[3], three_blues[3], three_browns[3])
+
+
+
+# for the legend
+sampleTable_16S$group <- interaction(sampleTable_16S$plant, sampleTable_16S$treatment)
+
+
+# plot legend 
+xx <- data.frame("samples" =levels(sampleTable_16S$group),
+           "color" = levels(sampleTable_16S$color) )
+xx$y <-rep(3:1,3)
+xx$x <-rep(1:3,each=3)
+
+pdf("../results/legend_16S.pdf", width=10/cm(1), height=7/cm(1), 
+    pointsize=10, fonts="Helvetica")
+plot(xx$x, xx$y, col=as.character(xx$color), pch=19, 
+     yaxt="n", xaxt="n", 
+     ylab="", xlab="", 
+     bty="n",
+     ylim=c(0,5), xlim=c(-1,4), xpd=TRUE)
+text(x=0, y=c(1:3), labels=rev(levels(sampleTable_16S$plant)))
+text(y=4, x=c(1:3), labels=levels(sampleTable_16S$treatment))
+dev.off()
+
+```
+
+## Optional: Remove ITS OTU1
+
+We find that OTU1 dominates the fungal community of arabidopsis.  The sequences for OTU1 matches *Olpidium brassicae*, a pathogen. My hypothesis it that this OTU has strong effect on beta diversity and so it drives seperations of Arabidopsis samples. I tried to remove sequences from OTU1 before running the anaylsis of beta diversity but this did not change much the results so in the end, I decided to leave them.
+
+```{r remove_OTU1 ,eval=FALSE, echo=TRUE}
+ind<- which(rownames(taxonTable_ITS)=="OTU1")
+#taxonomy_ITS[ind,]
+
+taxonomy_ITS<- taxonomy_ITS[-ind,]
+
+taxonTable_ITS <- taxonTable_ITS[-ind,]
+
+
+```
+
+\newpage
+## Data exploration
+
+### Number of sequences per sample
+
+```{r numberReadsPerSample_16S}
+# calculate number of sequences per sample
+number_sequences_perSample_16S<- colSums(taxonTable_16S)
+
+```
+
+
+```{r numberReadsPerSample_ITS}
+# calculate number of sequences per sample
+number_sequences_perSample_ITS<- colSums(taxonTable_ITS)
+
+# barplot(number_sequences_perSample_ITS)
+# range(number_sequences_perSample_ITS)
+
+```
+
+```{r numberSequences_type_16s, fig.width=12, fig.cap="Number of sequences per sample. Black horizontal line show the threshold used for rarefying (12500)."}
+
+
+# plot with 9 colors
+mycolor_16S<-as.character(sampleTable_16S$color)
+
+xx <-barplot(number_sequences_perSample_16S,
+             ylab= "Number of 16S reads", 
+             axisnames = FALSE, yaxt="n", col=mycolor_16S,main="16S")
+
+marks <-seq(from=0, to=50000, by=5000)
+axis(2,at=marks,labels=marks)
+labels_barplot <- sampleTable_16S$replicate
+text(x=xx,y=-300, labels=labels_barplot, pos=2, 
+     xpd=TRUE, srt=90, offset=0.0005, cex=0.8)
+legend("topright", 
+       legend=levels(sampleTable_16S$plant), pch=15,
+       col=c(three_reds[2], three_blues[2], three_browns[2]), bty="n")
+
+abline(h=raremax_16S)
+
+
+```
+
+
+```{r barplot_numberSequences_ITS , fig.width=12, , fig.cap="Number of sequences per sample. Black horizontal line show the threshold used for rarefying (12500). Five samples colored in grey were removed from the analyses of rarefied data"}
+
+# indices of outliers
+index_outliers_ITS<- which(colSums(taxonTable_ITS)<raremax_ITS)
+
+# plot with 9 colors +1
+mycolor_ITS<-as.character(sampleTable_ITS$color)
+
+mycolor_ITS[index_outliers_ITS] <- "grey"
+
+
+xx <-barplot(number_sequences_perSample_ITS,ylab= "Number of ITS reads", 
+             axisnames = FALSE, yaxt="n", col=mycolor_ITS,main="ITS")
+marks <-seq(from=0, to=250000, by=50000)
+axis(2,at=marks,labels=marks)
+
+# label by sample name
+labels_barplot <- sampleTable_ITS$replicate
+text(x=xx,y=-300, labels=labels_barplot, pos=2, 
+     xpd=TRUE, srt=90, offset=0.0005, cex=0.8)
+# label by primers
+# labels_barplot <- paste(which_primers[,3],"_", which_primers[,4], sep="")
+
+legend("topright", 
+       legend=levels(sampleTable_16S$plant), pch=15,
+       col=c(three_reds[2], three_blues[2], three_browns[2]), bty="n")
+
+
+
+# legend("topleft", legend=c(levels(sampleTable_16S$plant), "below_raremax"), pch=15,
+#       col=c(three_reds[3],three_blues[3],  
+#             three_browns[3],"grey"), bty="n")
+abline(h=raremax_ITS)
+
+```
+
+### 16S Rarefaction analysis
+
+
+```{r prepare_rarefaction_plot_16S, include=FALSE}
+# default plot is all in black, with black lines for the number of samples
+rarefaction_all_16S <-rarecurve(t(taxonTable_16S), 
+                                step = 1000, 
+                                10000, 
+                                xlab = "number of sequences",
+                                ylab = "number of OTUs",label = FALSE)
+```
+
+```{r rarefaction_plot, fig.width=12, fig.height=6, fig.cap="16S Rarefaction analysis. Diversity is highest in the soil followed by Petunia and then Arabidopsis"}
+
+mycolor_16S<-as.character(sampleTable_16S$color)
+
+
+Nmax <- sapply(rarefaction_all_16S, function(x) max(attr(x, "Subsample")))
+Smax <- sapply(rarefaction_all_16S, max)
+
+plot(c(1, max(Nmax)), c(1, max(Smax)), xlab = "Sample Size",main="16S",
+     ylab = "number of OTU", type = "n")
+abline(v = raremax_16S)
+for (i in seq_along(rarefaction_all_16S)) {
+  N <- attr(rarefaction_all_16S[[i]], "Subsample")
+  lines(N,rarefaction_all_16S[[i]], col = mycolor_16S[i]
+        #,lty=mylty[i]
+  )
+  
+}
+
+legend("bottomright", legend=rev(levels(sampleTable_16S$plant)), pch=15,
+       col=c(three_browns[2], three_blues[2], three_reds[2] ), bty="n")
+
+#postscript("../results/rarefaction.eps", width=14, height=6, horizontal = FALSE)
+pdf("../results/rarefaction_16S.pdf", width=17.5/cm(1), height=10/cm(1), 
+    pointsize=10, fonts="Helvetica")
+
+plot(c(1, max(Nmax)), c(1, max(Smax)), xlab = "Sample Size",
+     ylab = "number of OTU", type = "n")
+abline(v = raremax_16S)
+for (i in seq_along(rarefaction_all_16S)) {
+  N <- attr(rarefaction_all_16S[[i]], "Subsample")
+  lines(N,rarefaction_all_16S[[i]], col = mycolor_16S[i]
+        #,lty=mylty[i]
+  )
+  
+}
+legend("bottomright", legend=rev(levels(sampleTable_16S$plant)), pch=15,
+       col=c(three_browns[2], three_blues[2], three_reds[2] ), bty="n")
+dev.off()
+
+```
+
+### ITS Rarefaction analysis
+
+
+```{r prepare_rarefaction_plot_ITS, include=FALSE}
+# default plot is all in black, with black lines for the number of samples
+rarefaction_all_ITS<-rarecurve(t(taxonTable_ITS), 
+                               step = 100, 
+                               1000, 
+                               xlab = "number of sequences",
+                               ylab = "number of OTUs",label = FALSE)
+```
+
+```{r rarefaction_plot_ITS,  fig.width=12, fig.height=6, , fig.cap="ITS Rarefaction analysis. Diversity is highest in the soil followed by Petunia and then Arabidopsis"}
+
+# indices of outliers
+index_outliers_ITS<- which(colSums(taxonTable_ITS)<raremax_ITS)
+
+# plot with 9 colors +1
+mycolor_ITS<-as.character(sampleTable_ITS$color)
+
+mycolor_ITS[index_outliers_ITS] <- "grey"
+
+
+#pdf("../results/rarefaction_ITS.pdf", width=17.5/cm(1), height=10/cm(1), pointsize=10, fonts="Helvetica")
+
+
+# plot with three colors
+Nmax <- sapply(rarefaction_all_ITS, function(x) max(attr(x, "Subsample")))
+Smax <- sapply(rarefaction_all_ITS, max)
+plot(c(1, max(Nmax)), c(1, max(Smax)), xlab = "Sample Size",
+     ylab = "number of OTU", type = "n")
+abline(v = raremax_ITS)
+for (i in seq_along(rarefaction_all_ITS)) {
+  N <- attr(rarefaction_all_ITS[[i]], "Subsample")
+  lines(N,rarefaction_all_ITS[[i]], col = mycolor_ITS[i]
+        #,lty=mylty[i]
+  )
+  
+}
+
+legend("bottomright", 
+       legend=c(rev(levels(sampleTable_ITS$plant)),"below threshold"), pch=15,
+       col=c(three_browns[3], three_blues[3], three_reds[3],"grey"), bty="n")
+
+#dev.off()
+
+pdf("../results/rarefaction_ITS.pdf", width=17.5/cm(1), height=10/cm(1), pointsize=10, fonts="Helvetica")
+
+
+# plot with three colors
+Nmax <- sapply(rarefaction_all_ITS, function(x) max(attr(x, "Subsample")))
+Smax <- sapply(rarefaction_all_ITS, max)
+plot(c(1, max(Nmax)), c(1, max(Smax)), xlab = "Sample Size",
+     ylab = "number of OTU", type = "n")
+abline(v = raremax_ITS)
+for (i in seq_along(rarefaction_all_ITS)) {
+  N <- attr(rarefaction_all_ITS[[i]], "Subsample")
+  lines(N,rarefaction_all_ITS[[i]], col = mycolor_ITS[i]
+        #,lty=mylty[i]
+  )
+  
+}
+
+legend("bottomright", 
+       legend=c(rev(levels(sampleTable_ITS$plant)),"below threshold"), pch=15,
+       col=c(three_browns[3], three_blues[3], three_reds[3],"grey"), bty="n")
+
+dev.off()
+
+```
+
+\newpage
+
+## Diversity: Focus on roots samples 
+
+### alpha diversity
+
+```{r only_root_for_alpha_ITS, echo=FALSE}
+# only plant
+taxonTable_plant_ITS <-taxonTable_ITS[,!sampleTable_ITS$plant=="soil"]
+sampleTable_plant_ITS <-subset(sampleTable_ITS, !sampleTable_ITS$plant=="soil")
+sampleTable_plant_ITS <-droplevels(sampleTable_plant_ITS)
+
+# remove  OTUs with zero sequences
+taxonTable_plant_ITS <-taxonTable_plant_ITS[rowSums(taxonTable_plant_ITS)>0,]
+
+# remove  OTUs from taxonomy
+taxonomy_plant_ITS <-taxonomy_ITS[rownames(taxonomy_ITS)%in%rownames(taxonTable_plant_ITS),]
+stopifnot(identical(rownames(taxonomy_plant_ITS),rownames(taxonTable_plant_ITS)))
+
+n_otu_step6_ITS <- nrow(taxonTable_plant_ITS) # 397
+n_samples_step6_ITS  <- ncol(taxonTable_plant_ITS) #48
+n_sequences_setp6_ITS  <- sum(taxonTable_plant_ITS) # 129502
+
+table(sampleTable_plant_ITS$plant,sampleTable_plant_ITS$treatment)
+
+```
+
+
+```{r only_root_for_alpha_16S, echo=FALSE}
+# only Arabidopsis and Petunia
+remove_samples <- sampleTable_16S$plant=="soil"
+taxonTable_plant_16S<-taxonTable_16S[,!remove_samples]
+sampleTable_plant_16S<-droplevels(sampleTable_16S[!remove_samples,])
+
+# remove  OTUs with zero sequences
+taxonTable_plant_16S <-taxonTable_plant_16S[rowSums(taxonTable_plant_16S)>0,]
+
+taxonomy_plant_16S <-taxonomy_16S[rownames(taxonomy_16S)%in%rownames(taxonTable_plant_16S),]
+stopifnot(identical(rownames(taxonomy_plant_16S),rownames(taxonTable_plant_16S)))
+
+n_otu_step6_16s <- nrow(taxonTable_plant_16S) # 3155
+n_samples_step6_16S <- ncol(taxonTable_plant_16S) # 48
+n_sequences_setp6_16S <- sum(taxonTable_plant_16S) # 1337667
+
+table(sampleTable_plant_16S$plant,sampleTable_plant_16S$treatment)
+
+```
+
+
+
+
+
+```{r rarefy_diversity_16S, eval=FALSE}
+
+richness_mat <- c()
+diversity_mat <- c()
+even_mat <- c()
+
+for (i in 1:500){
+  # generate rarefied community
+  temp_mat <- t(rrarefy(t(taxonTable_plant_16S), raremax_16S))
+  
+  # richness is species number
+  s <- specnumber(temp_mat, MARGIN=2)
+  #cbind( colSums(temp_mat>0),specnumber(temp_mat, MARGIN=2))
+  richness_mat <- cbind(richness_mat,s)
+  
+  # from Jost 2006: D=exp(H), exponential of shannon entropy
+  shannon <- vegan::diversity(temp_mat, index = "shannon", MARGIN=2)
+  d <-exp(shannon)
+  diversity_mat <- cbind(diversity_mat,d)
+  
+  # Hill's ratio  also called Sheldon's evenness
+  j<-exp(shannon)/s
+  even_mat <- cbind(even_mat,j)
+
+}
+
+# calculate means of subsamples
+otu_diversity <- rowMeans(diversity_mat)
+otu_richness <- rowMeans(richness_mat)
+otu_evenness <- rowMeans(even_mat)
+
+
+# put them all in one dataframe
+summary_diversity_16S <- data.frame( cbind( otu_diversity, otu_richness, otu_evenness))
+
+stopifnot(identical(rownames(sampleTable_plant_16S), names(otu_richness)))
+
+for_anova_16S<-cbind(summary_diversity_16S,sampleTable_plant_16S)
+
+write.csv(for_anova_16S, file="../results/for_anova_rarefied_16S.csv")
+
+```
+
+```{r rarefy_diversity_ITS, eval=FALSE}
+
+# first remove the samples which are below the threshold
+
+# indices of outlier
+index_outliers<- which(colSums(taxonTable_plant_ITS)<raremax_ITS)
+
+taxonTable_rare <-taxonTable_plant_ITS[,-index_outliers]
+sampleTable_rare <- sampleTable_plant_ITS[-index_outliers,]
+stopifnot(identical(rownames(sampleTable_rare),colnames(taxonTable_rare)))
+
+# remove  OTUs with zero sequences
+taxonTable_rare <-taxonTable_rare[rowSums(taxonTable_rare)>0,]
+
+richness_mat <- c()
+diversity_mat <- c()
+even_mat <- c()
+
+for (i in 1:500){
+  # generate rarefied community
+  temp_mat <- t(rrarefy(t(taxonTable_rare), raremax_ITS))
+  
+  # richness is species number
+  s <- specnumber(temp_mat, MARGIN=2)
+  #cbind( colSums(temp_mat>0),specnumber(temp_mat, MARGIN=2))
+  richness_mat <- cbind(richness_mat,s)
+  
+  # from Jost 2006: D=exp(H), exponential of shannon entropy
+  shannon <- vegan::diversity(temp_mat, index = "shannon", MARGIN=2)
+  d <-exp(shannon)
+  diversity_mat <- cbind(diversity_mat,d)
+  
+  # Hill's ratio  also called Sheldon's evenness
+  j<-exp(shannon)/s
+  even_mat <- cbind(even_mat,j)
+
+}
+
+# calculate means of subsamples
+otu_diversity <- rowMeans(diversity_mat)
+otu_richness <- rowMeans(richness_mat)
+otu_evenness <- rowMeans(even_mat)
+
+
+# put them all in one dataframe
+summary_diversity_ITS <- data.frame( cbind( otu_diversity, otu_richness, otu_evenness))
+
+stopifnot(identical(rownames(sampleTable_rare), names(otu_richness)))
+
+for_anova_ITS<-cbind(summary_diversity_ITS,sampleTable_rare)
+
+write.csv(for_anova_ITS, file="../results/for_anova_rarefied_ITS.csv")
+
+```
+
+```{r alternative_read_alpha, eval=TRUE}
+for_anova_16S <- read.csv ("../results/for_anova_rarefied_16S.csv",header=TRUE)
+for_anova_ITS <- read.csv ("../results/for_anova_rarefied_ITS.csv",header=TRUE)
+
+# change the order of the levels for P treatment, from low to high
+for_anova_ITS$treatment <- factor (for_anova_ITS$treatment, levels(for_anova_ITS$treatment)[c(2,3,1)])
+
+# change the order of the levels for P treatment, from low to high
+for_anova_16S$treatment <- factor (for_anova_16S$treatment, levels(for_anova_16S$treatment)[c(2,3,1)])
+
+```
+
+- concentrate on plant samples (remove soil samples)
+- For 16S, there are no samples below threshold (`r raremax_16S`) 
+- For ITS, there are  `r length(index_outliers_ITS)` samples below threshold (`r raremax_ITS`) 
+- rarefy to `r raremax_16S` multiple times (at the moment set to 500)
+- for example subsample, estimate richness, diversity and evenness
+-  richness = number of OTUs
+- from Jost 2006: diversity is defined as exp(shannon), shannon is calculated with diversity function of vegan package
+- sheldon evenness is diversity over richness
+- 2-factor ANOVA with P treatment and plant species
+- diagnostic plots are saved into plots folder
+
+
+```{r compare_fungal_bacterial_richness}
+
+xx <-tapply(for_anova_ITS$otu_richness,for_anova_ITS$plant, FUN=mean)
+
+yy <-tapply(for_anova_16S$otu_richness,for_anova_16S$plant, FUN=mean)
+
+yy/xx
+
+```
+
+\newpage
+
+###  Richness 16S
+
+
+```{r boxplot_richness_seperate_16S, echo=FALSE, fig.height=4}
+
+#pdf("../results/alpha_richness_16S.pdf", width=8.5/cm(1), height=8.5/cm(1), pointsize=6, fonts="Helvetica")
+
+diversity_plot(d = for_anova_16S,
+               response="otu_richness", 
+               explanatory1 = "plant",
+               explanatory2 = "treatment", 
+               my_ylab="OTU richness")
+#dev.off()
+
+
+```
+### richness: ANOVA 2-way 16S
+
+```{r anova_richness_16S, echo=FALSE}
+model_richness_16S <- aov(otu_richness~treatment*plant, 
+                          data=for_anova_16S)
+summary(model_richness_16S)
+pdf("../plots/diagnostic_plot_richness_16S.pdf")
+par(mfrow=c(2,2))
+plot(model_richness_16S)
+dev.off()
+
+```
+
+###  Richness ITS
+
+
+```{r boxplot_richness_seperate_ITS, echo=FALSE, fig.height=4}
+
+#pdf("../results/alpha_richness_16S.pdf", width=8.5/cm(1), height=8.5/cm(1), pointsize=6, fonts="Helvetica")
+
+diversity_plot(d = for_anova_ITS,
+               response="otu_richness", 
+               explanatory1 = "plant",
+               explanatory2 = "treatment", 
+               my_ylab="OTU richness")
+#dev.off()
+
+
+```
+### richness: ANOVA 2-way ITS
+
+```{r anova_richness_ITS, echo=FALSE}
+model_richness_ITS <- aov(otu_richness~treatment*plant, 
+                          data=for_anova_ITS)
+summary(model_richness_ITS)
+pdf("../plots/diagnostic_plot_richness_ITS.pdf")
+par(mfrow=c(2,2))
+plot(model_richness_ITS)
+dev.off()
+
+```
+
+### Alpha Diversity: to do
+- maybe barplot or violin plot (see Leff et al.)
+- optional: plot each resample from rarefy seperately (similar to PLOS ONE paper)
+- 2-way ANOVA and then appropriate post-hoc test 
+- should I add letters to plot for multiple comparison? 
+- think about which plots to show (depending on ANOVA results)
+- plot also other diversity indices (sheldon, diversity) either in main body or in supplemental, and maybe use layout to put all 2x3 plots on one? 
+- prepare ANOVA results for (supplementary) table (all P values, F test), see Phosphate_manuscript.doc
+- correlate 16S OTU richness with AMF colonization => figure for main body or for supplemental?
+
+\newpage
+
+
+
+## Filter data
+- for beta diversity
+- to identify differentially abundant OTUs (edgeR)
+- Charlotte's filtering strategy: We exclude all OTUs that don't have at least 4 assigned reads in at least 4 samples (the size of the smallest group in our data).
+
+
+```{r filter_edgeR_16S}
+## old  stratedy
+# keep_OTUs <- which(rowSums(taxonTable) >= 40)
+# taxonTable_filtered <- taxonTable[keep_OTUs, ]
+
+
+# Charlotte's filtering strategy
+#define min row sum for filtering
+min_rowsum <- 4
+
+keep_OTUs_16S <- which(rowSums(taxonTable_16S >= min_rowsum) >= min_rowsum)
+
+taxonTable_filtered_16S <- taxonTable_16S[keep_OTUs_16S, ]
+
+
+n_otu_step9_16S<- nrow(taxonTable_filtered_16S) # 1255
+n_samples_step9_16S <- ncol(taxonTable_filtered_16S) #60
+n_sequences_setp9_16S <- sum(taxonTable_filtered_16S) # 1710485
+
+
+# remove  OTUs from taxonomy
+taxonomy_filtered_16S <- taxonomy_16S[keep_OTUs_16S, ]
+
+# order OTUs in table 3 by by the same order as table 1
+ord = match(rownames(taxonTable_filtered_16S), rownames(taxonomy_filtered_16S)) 
+taxonomy_filtered_16S = taxonomy_filtered_16S[ord, ]
+
+stopifnot(identical(rownames(taxonomy_filtered_16S),rownames(taxonTable_filtered_16S)))
+
+
+write.csv(taxonTable_filtered_16S, "../results/otu_16S.csv" )
+write.csv(sampleTable_16S, "../results/samples_16S.csv" )
+write.csv(taxonomy_filtered_16S, "../results/taxonomy_16S.csv" )
+
+```
+
+
+```{r filter_edgeR_ITS}
+## old  stratedy
+#keep_OTUs <- which(rowSums(taxonTable) >= 40)
+#taxonTable_filtered <- taxonTable[keep_OTUs, ]
+
+# Charlotte's filtering strategy
+keep_OTUs_ITS <- which(rowSums(taxonTable_ITS >= min_rowsum) >= min_rowsum)
+taxonTable_filtered_ITS <- taxonTable_ITS[keep_OTUs_ITS, ]
+
+# Klaus's strategy: # min 0.1% mean relative abundance 
+#taxonTable_norm <- 100*decostand(taxonTable, method="total", MARGIN=2)
+#keep_OTUs <- which(rowMeans(taxonTable_norm) >= 0.1)
+#taxonTable_filtered <- taxonTable[keep_OTUs, ] 
+
+
+n_otu_step9_ITS <- nrow(taxonTable_filtered_ITS) # 531
+n_samples_step9_ITS <- ncol(taxonTable_filtered_ITS) # 60
+n_sequences_setp9_ITS <- sum(taxonTable_filtered_ITS) # 3419670
+
+
+# remove  OTUs from taxonomy
+taxonomy_filtered_ITS <- taxonomy_ITS[keep_OTUs_ITS, ]
+
+# order OTUs in table 3 by by the same order as table 1
+ord = match(rownames(taxonTable_filtered_ITS), rownames(taxonomy_filtered_ITS)) 
+taxonomy_filtered_ITS = droplevels(taxonomy_filtered_ITS[ord, ])
+
+stopifnot(identical(rownames(taxonomy_filtered_ITS),rownames(taxonTable_filtered_ITS)))
+
+
+# check OTU1: Olpidium brassicae
+# which(rowSums(taxonTable_filtered_ITS)==max(rowSums(taxonTable_filtered_ITS)))
+# taxonTable_filtered_ITS["OTU1",]
+#taxonomy_filtered_ITS["OTU1",]
+write.csv(taxonTable_filtered_ITS, "../results/otu_ITS.csv" )
+write.csv(sampleTable_ITS, "../results/samples_ITS.csv" )
+write.csv(taxonomy_filtered_ITS, "../results/taxonomy_ITS.csv" )
+
+
+```
+
+
+
+- For 16S, there are $`r length(keep_OTUs_16S)`$ OTU left for the analysis. This corresponds to about a third of the OTUs: $`r round(100*n_otu_step9_16S/n_otu_step1_16S,2)`$ of the inital OTUs ($`r  nrow(taxonTable_16S)`$)
+
+- For ITS, there are $`r length(keep_OTUs_ITS)`$ OTU left for the analysis. This corresponds to $`r round(100*n_otu_step9_ITS/n_otu_step1_ITS,2)`$\%  of the inital OTUs ($`r  nrow(taxonTable_ITS)`$)
+
+- we do NOT rarefy for beta diversity and the rest of the analysis
+- we use TMM normalization for beta-diversity and for edgeR
+- what about barplots, ternary plot and plot individual OTUs, do we use TSS or TMM ? to be decided.
+
+
+
+## Using edgeR to normalize data (TMM) for beta diversity and to identify differentially abundant OTU
+
+- work also with soil samples for this analysis
+- filtered data
+- MDS plot with edgeR (Euclidian distances for top=500 OTUs)
+
+```{r edgeR_all_16S, }
+dge_all_16S <- DGEList(counts = taxonTable_filtered_16S,
+                       group = sampleTable_16S$plant,
+                       genes = taxonomy_filtered_16S)
+
+dge_all_16S <- edgeR::calcNormFactors(dge_all_16S)
+
+plotMDS(dge_all_16S, labels = sampleTable_16S$SampleName,
+        col = as.numeric(sampleTable_16S$plant), cex = 0.5)
+
+legend("topright", legend=c(levels(sampleTable_ITS$plant)), pch=15,
+       col=c(1:3),bty="n")
+
+norm_TMM_16S <- cpm(dge_all_16S, normalized.lib.sizes=TRUE, log=FALSE)
+norm_TSS_16S <- cpm(dge_all_16S, normalized.lib.sizes=FALSE, log=FALSE)
+
+# normalize TTS and calculate percentage
+otu_16S_RA <- t(t(taxonTable_filtered_16S)/colSums(taxonTable_filtered_16S)) * 100
+# colSums(otu_16S_RA)
+
+# compare to norm_TSS_16S
+#otu_16S_RA[1:4,1:10]
+#norm_TSS_16S[1:4,1:10]/10000
+```
+
+
+```{r edgeR_all_ITS, }
+dge_all_ITS <- DGEList(counts = taxonTable_filtered_ITS,
+group = sampleTable_ITS$plant,
+genes = taxonomy_filtered_ITS)
+
+dge_all_ITS <- edgeR::calcNormFactors(dge_all_ITS)
+
+plotMDS(dge_all_ITS, labels = sampleTable_ITS$treatment,
+col = as.numeric(sampleTable_ITS$plant), cex = 0.5)
+
+legend("bottomright", legend=c(levels(sampleTable_ITS$plant)), pch=15,
+col=c(1:3),bty="n")
+
+
+norm_TMM_ITS <- cpm(dge_all_ITS, normalized.lib.sizes=TRUE, log=FALSE)
+norm_TSS_ITS <- cpm(dge_all_ITS, normalized.lib.sizes=FALSE, log=FALSE)
+
+# normalize TTS and calculate percentage
+otu_ITS_RA <- t(t(taxonTable_filtered_ITS)/colSums(taxonTable_filtered_ITS)) * 100
+
+```
+
+
+\newpage
+
+## Beta diversity  
+- also focus on root samples
+- data normalized (TSS, log=FALSE)
+- like Leff et al., use square-root transformed data. 
+- Bray-Curtis dissimilarity (binary=FALSE)
+- PCoA 
+- Phyloseq package
+
+###  Principle Coordinate Analysis (phyloseq ordinate function, method="PCoA", distance="bray") 16S
+
+
+\newpage
+
+
+```{r phyloseq_object_16S, }
+otu_16S_plant <- t(t(taxonTable_plant_16S)/colSums(taxonTable_plant_16S)) * 100
+#colSums(otu_16S_plant)
+
+# like Leff et al, use square-root transformed data
+phy_otu_16S <- otu_table(sqrt(otu_16S_plant), taxa_are_rows=TRUE)
+phy_tax_16S <- tax_table(as.matrix(taxonomy_plant_16S))
+phy_design_16S <- sample_data(sampleTable_plant_16S)
+
+#physeq_bac <- phyloseq(phy_otu, phy_design)
+physeq_bac_16S <- phyloseq(phy_otu_16S, phy_tax_16S, phy_design_16S)
+
+petunia_cca_16S  <- ordinate(physeq_bac_16S, "PCoA", distance="bray", binary=FALSE)
+
+col_16S <- as.character(sampleTable_plant_16S[,"color"])
+names(col_16S) <- as.character(sampleTable_plant_16S$group)
+
+
+```
+
+
+```{r phyloseq_object_ITS, }
+otu_ITS_plant <- t(t(taxonTable_plant_ITS)/colSums(taxonTable_plant_ITS)) * 100
+#colSums(otu_ITS_plant)
+
+# like Leff et al, use square-root transformed data
+phy_otu_ITS <- otu_table(sqrt(otu_ITS_plant), taxa_are_rows=TRUE)
+phy_tax_ITS <- tax_table(as.matrix(taxonomy_plant_ITS))
+phy_design_ITS <- sample_data(sampleTable_plant_ITS)
+
+#physeq_bac <- phyloseq(phy_otu, phy_design)
+physeq_bac_ITS <- phyloseq(phy_otu_ITS, phy_tax_ITS, phy_design_ITS)
+
+petunia_cca_ITS  <- ordinate(physeq_bac_ITS, "PCoA", distance="bray", binary=FALSE)
+
+col_ITS <- as.character(sampleTable_plant_ITS[,"color"])
+names(col_ITS) <- as.character(sampleTable_plant_ITS$group)
+
+```
+
+
+```{r phyloseq_16S_pc1_pc2, fig.height=4}
+
+
+my_x <- (paste("PCo 1", paste("(",round(petunia_cca_16S$values[1,2]*100,1),"%",")",sep=""),sep=" "))
+
+my_y <- (paste("PCo 2", paste("(",round(petunia_cca_16S$values[2,2]*100,1),"%",")",sep=""),sep=" "))
+
+
+
+pdf("../results/PCoA_bray_16S.pdf", width=7.5/cm(1), height=7.5/cm(1), pointsize=12, fonts="Helvetica")
+
+p <- plot_ordination(physeq_bac_16S, petunia_cca_16S,
+                     axes=c(1,2), color="group")+
+scale_colour_manual(values=col_16S)+
+geom_point(size=2)+
+theme_bw()+
+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+xlab(my_x)+
+ylab(my_y)+
+theme(legend.position="none")+
+ggtitle("Bacteria")
+
+dev.off()
+
+print(p)
+
+```
+
+
+
+```{r phyloseq_ITS_pc1_pc2, fig.height=4}
+
+
+my_x <- (paste("PCo 1", paste("(",round(petunia_cca_ITS$values[1,2]*100,1),"%",")",sep=""),sep=" "))
+
+my_y <- (paste("PCo 2", paste("(",round(petunia_cca_ITS$values[2,2]*100,1),"%",")",sep=""),sep=" "))
+
+
+## PCoA is not as we expect check colors
+# cbind(col_ITS, col_16S)
+#cbind(colnames(taxonTable_arab_pet_ITS), rownames(sampleTable_arab_pet_ITS))
+
+pdf("../results/PCoA_bray_ITS.pdf", width=7.5/cm(1), height=7.5/cm(1), pointsize=12, fonts="Helvetica")
+
+p <- plot_ordination(physeq_bac_ITS, petunia_cca_ITS,axes=c(1,2),
+color="group")+
+scale_colour_manual(values=col_ITS)+
+geom_point(size=2)+
+theme_bw()+
+theme(panel.grid.major = element_blank(), panel.grid.minor =   element_blank())+
+xlab(my_x)+
+ylab(my_y)+
+theme(legend.position="none")+
+ggtitle("Fungi")
+print(p)
+
+dev.off()
+
+print(p)
+
+
+```
+
+
+
+## 16S Barplot at the phylum or Family level (each sample own barplot)
+
+- here I use TSS normalized filtered data  
+
+- should I use TMM data multplied by 10000 instead?
+
+```{r barplot_phylum_16S}
+
+
+newDat <- reshape2::melt(otu_16S_RA)
+colnames(newDat) <- c("OTU","sample","RA")
+
+# add the taxonomy information at the level of interet
+newDat$phylum <- taxonomy_filtered_16S[newDat$OTU, "Phylum"] # match implicit
+
+# replace Proteobacetia with Class
+newDat$class <- taxonomy_filtered_16S[newDat$OTU, "Class"] # match 
+
+newDat$taxa <- newDat$phylum
+
+newDat$taxa[newDat$phylum=="D_1__Proteobacteria"] <- newDat$class[newDat$phylum=="D_1__Proteobacteria"] 
+
+# remove letters
+newDat$taxa<- gsub("[[:punct:]]","",newDat$taxa)
+newDat$taxa<- gsub("D1","",newDat$taxa)
+newDat$taxa<- gsub("D2","",newDat$taxa)
+
+
+# sum all OTU that belong to the same taxa
+sumRA<-aggregate(newDat$RA, by=newDat[c("sample", "taxa")], sum, drop=TRUE)
+colnames(sumRA)[3] <- "RA"
+
+# add the sample attributes
+sumRA <- cbind(sumRA, 
+    sampleTable_16S[sumRA$sample, c("plant","treatment","replicate")] )
+rownames(sumRA) <- NULL
+
+# small step to understanding the next step
+# yy <-split(xx$RA, xx$phylum)
+# sapply(yy, mean) # calculaet mean of each taxa
+
+#add mean RA for taxa 
+foo <-function(x) rep(mean(x), length(x))
+sumRA$mean <- unsplit(lapply(split(sumRA$RA, sumRA$taxa),foo), sumRA$taxa)
+
+# OTU which are less than  1% mean RA are represented as grey
+#xx$phylum <- ifelse(xx$mean > 1, as.character(xx$phylum), "others")
+sumRA$taxa[sumRA$mean<1] <- NA
+
+
+pdf("../results/barplot_phylum_16S.pdf",width=17.5/cm(1), height=10/cm(1), pointsize=6, fonts="Helvetica")
+p <- ggplot(sumRA, aes(x = sample, y = RA)) + 
+  geom_bar(aes(fill = taxa),stat = "identity")+
+  geom_text(aes(label=replicate, x = sample, y=0),
+            angle=90, vjust = 0.5, hjust = 1, 
+            fontface="plain", size=1.8)+
+  facet_grid(~plant+treatment,scales = "free", space = "free") +
+  ylab("Relative Abundance")+
+  theme_minimal() +
+  theme(axis.text.x=element_blank(), axis.title.x=element_blank())
+print(p)
+dev.off()
+
+print(p)
+```
+
+\newpage
+
+## ITS Barplot at the phylum or Family level (each sample own barplot)
+
+
+```{r barplot_phylum_ITS}
+
+newDat <- reshape2::melt(otu_ITS_RA)
+colnames(newDat) <- c("OTU","sample","RA")
+
+# add the taxonomy information at the level of interet
+newDat$phylum <- taxonomy_filtered_ITS[newDat$OTU, "Phylum"] # match implicit
+
+# remove letters
+newDat$phylum<- gsub("[[:punct:]]","",newDat$phylum)
+newDat$phylum<- gsub("p","",newDat$phylum)
+
+
+# sum all OTU that belong to the same taxa
+sumRA<-aggregate(newDat$RA, by=newDat[c("sample", "phylum")], sum, drop=TRUE)
+colnames(sumRA)[3] <- "RA"
+
+# add the sample attributes
+sumRA <- cbind(sumRA, 
+    sampleTable_ITS[sumRA$sample, c("plant","treatment","replicate")] )
+rownames(sumRA) <- NULL
+
+# small step to understanding the next step
+# yy <-split(xx$RA, xx$phylum)
+# sapply(yy, mean) # calculate mean of each taxa
+
+#add mean RA for taxa 
+foo <-function(x) rep(mean(x), length(x))
+sumRA$mean <- unsplit(lapply(split(sumRA$RA, sumRA$phylum),foo), sumRA$phylum)
+
+# OTU which are less than  1% mean RA are represented as grey
+#xx$phylum <- ifelse(xx$mean > 1, as.character(xx$phylum), "others")
+sumRA$phylum[sumRA$mean<1] <- NA
+
+pdf("../results/barplot_phylum_ITS.pdf",width=17.5/cm(1), height=10/cm(1), pointsize=6, fonts="Helvetica")
+
+p <- ggplot(sumRA, aes(x = sample, y = RA)) + 
+  geom_bar(aes(fill = phylum),stat = "identity")+
+  geom_text(aes(label=replicate, x = sample, y=0),
+            angle=90, vjust = 0.5, hjust = 1, 
+            fontface="plain", size=1.8)+
+  facet_grid(~plant+treatment,scales = "free", space = "free")+
+  ylab("Relative Abundance")+
+  theme_minimal() +
+  theme(axis.text.x=element_blank(), axis.title.x=element_blank())
+print(p)
+dev.off()
+
+print(p)
+
+```
+
+### To do
+- decide whether to use TSS (used now) or TMM normalized data
+- get better size for xlab
+- better color
+- mabye boxes at the top?
+- maybe use illustrator or other programs to make the plot more tidy
+
+
+\newpage
